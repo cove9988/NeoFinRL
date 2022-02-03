@@ -59,7 +59,7 @@ class tgym(gym.Env):
     19. add timelimit wrapper as we train on a fixed time frame (weekly, monthly, daily)
     """
     metadata = {'render.modes': ['graph', 'human', 'file']}
-
+    env_id = "TradingGym-v0"
     def __init__(self, df, env_config_file='./neo_finrl/env_fx_trading/config/gdbusd-test-1.json') -> None:
         super(tgym, self).__init__()
         self.cf = EnvConfig(env_config_file)
@@ -73,7 +73,8 @@ class tgym(gym.Env):
         self.do_nothing = self.cf.env_parameters("do_nothing")
         self.log_filename = self.cf.env_parameters("log_filename") + \
             datetime.datetime.now().strftime('%Y%m%d%H%M%S') + '.csv'
-        
+        self.description = self.cf.env_parameters("description")
+        self.shaping_reward = self.cf.env_parameters("shaping_reward")
         self.df = df
         self.df["_time"] = df[self.time_col]
         self.df["_day"] = df["weekday"]
@@ -112,7 +113,7 @@ class tgym(gym.Env):
         self.reward_range = (-200,800)
         self.action_space = spaces.Box(low=-1,
                                        high=1,
-                                       shape=(len(self.assets),), dtype=np.float32)
+                                       shape=(len(self.assets),))
         # first two 3 = balance,current_holding, max_draw_down_pct
         _space = 3 + len(self.assets) \
                  + len(self.assets) * len(self.observation_list)
@@ -147,6 +148,7 @@ class tgym(gym.Env):
             self._h = self.get_observation(self.current_step, i, "High")
             self._l = self.get_observation(self.current_step, i, "Low")
             self._c = self.get_observation(self.current_step, i, "Close")
+            self._c_previous = self.get_observation(self.current_step, i -1, "Close") if i > 0 else self._c
             self._t = self.get_observation(self.current_step, i, "_time")
             self._day = self.get_observation(self.current_step, i,"_day")
             _action, pt_ratio, _ = form_action(x)
@@ -239,6 +241,7 @@ class tgym(gym.Env):
                         _total_reward += tr["PT"]
                         self.current_holding[i] -= 1
                     else:  # still open
+                        _total_reward = self.shaping_reward if self._c >= self._c_previous else -self.shaping_reward
                         self.current_draw_downs[i] = int(
                             (self._l - tr["ActionPrice"]) * _point)
                         # _total_reward += self.current_draw_downs[i]
@@ -264,6 +267,7 @@ class tgym(gym.Env):
                         _total_reward += tr["PT"]
                         self.current_holding[i] -= 1
                     else:
+                        _total_reward = self.shaping_reward if self._c <= self._c_previous else -self.shaping_reward
                         self.current_draw_downs[i] = int(
                             (tr["ActionPrice"] - self._h) * _point)
                         # _total_reward += self.current_draw_downs[i]

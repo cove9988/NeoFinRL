@@ -24,7 +24,9 @@
         "log_filename": "./data/log/log_",
         "do_nothing": 0,
         "title":"GBPUSD EURUSD 5M",
-        "description":"testing sma, rsi and boll input in weekly with GBPUSD EURUSD"
+        "description":"testing sma, rsi and boll input in weekly with GBPUSD EURUSD",
+        "shaping_reward": 0.1,
+        "is_training": true
     },
     "symbol": {
         "GBPUSD": {
@@ -34,7 +36,7 @@
             "over_night_penalty": 100,
             "stop_loss_max": 200,
             "profit_taken_max": 800,
-            "max_current_holding": 5,
+            "max_current_holding": 1,
             "limit_order": false,
             "limit_order_expiration": 5
         },
