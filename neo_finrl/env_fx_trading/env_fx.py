@@ -75,6 +75,8 @@ class tgym(gym.Env):
             datetime.datetime.now().strftime('%Y%m%d%H%M%S') + '.csv'
         self.description = self.cf.env_parameters("description")
         self.shaping_reward = self.cf.env_parameters("shaping_reward")
+        self.forward_window = self.cf.env_parameters("forward_window")
+        self.backward_window = self.cf.env_parameters("backward_window")
         self.df = df
         self.df["_time"] = df[self.time_col]
         self.df["_day"] = df["weekday"]
@@ -115,11 +117,15 @@ class tgym(gym.Env):
                                        high=1,
                                        shape=(len(self.assets),))
         # first two 3 = balance,current_holding, max_draw_down_pct
-        _space = 3 + len(self.assets) \
-                 + len(self.assets) * len(self.observation_list)
+        # _space = 3 + len(self.assets) \
+        #          + len(self.assets) * len(self.observation_list) 
+
+        len(self.assets) * len(self.observation_list) 
         self.observation_space = spaces.Box(low=-np.inf,
                                             high=np.inf,
-                                            shape=(_space, ))
+                                            # shape=(_space, ))
+                                            shape = (len(self.assets) * len(self.observation_list),self.backward_window))
+        self.reset()
         print(
             f'initial done:\n'
             f'observation_list:{self.observation_list}\n '
@@ -158,7 +164,8 @@ class tgym(gym.Env):
             if _action in (ActionEnum.BUY, ActionEnum.SELL) and not done \
                 and self.current_holding[i] < self.cf.symbol(self.assets[i],"max_current_holding"):
                 # generating PT based on action fraction
-                _profit_taken = pt_ratio * self.cf.symbol(self.assets[i],"profit_taken_max") + self.cf.symbol(self.assets[i],"stop_loss_max")
+                # _profit_taken = pt_ratio * self.cf.symbol(self.assets[i],"profit_taken_max") + self.cf.symbol(self.assets[i],"stop_loss_max")
+                _profit_taken = self.cf.symbol(self.assets[i],"profit_taken_max")
                 self.ticket_id += 1
                 if self.cf.symbol(self.assets[i],"limit_order"):
                     transaction = {
@@ -175,7 +182,7 @@ class tgym(gym.Env):
                         "CloseTime": "",
                         "ClosePrice": 0.0,
                         "Point": 0,
-                        "Reward": -self.cf.symbol(self.assets[i],"transaction_fee"),
+                        "Reward": +self.cf.symbol(self.assets[i],"transaction_fee"),
                         "DateDuration": self._day,
                         "Status": 0,
                         "LimitStep":self.current_step,
@@ -198,7 +205,7 @@ class tgym(gym.Env):
                         "CloseTime": "",
                         "ClosePrice": 0.0,
                         "Point": 0,
-                        "Reward": -self.cf.symbol(self.assets[i],"transaction_fee"),
+                        "Reward": +self.cf.symbol(self.assets[i],"transaction_fee"),
                         "DateDuration": self._day,
                         "Status": 0,
                         "LimitStep":self.current_step,
@@ -207,13 +214,14 @@ class tgym(gym.Env):
                     }
                     self.current_holding[i] += 1
                     self.tranaction_open_this_step.append(transaction)
-                    self.balance -= self.cf.symbol(self.assets[i],"transaction_fee")
+                    self.balance += self.cf.symbol(self.assets[i],"transaction_fee")
                     self.transaction_live.append(transaction)
-            elif _action == ActionEnum.HOLD and self.do_nothing > 0:
-                rewards[i] += self.do_nothing
+            elif _action == ActionEnum.HOLD:
+                rewards[i] += self.do_nothing 
         return sum(rewards)
 
     def _calculate_reward(self, i, done):
+        close = True
         _total_reward = 0
         _max_draw_down = 0
         for tr in self.transaction_live:
@@ -222,11 +230,11 @@ class tgym(gym.Env):
                 #cash discount overnight
                 if self._day > tr["DateDuration"]:
                     tr["DateDuration"] = self._day
-                    tr["Reward"] -= self.cf.symbol(self.assets[i],"over_night_penalty")
+                    tr["Reward"] += self.cf.symbol(self.assets[i],"over_night_penalty")
 
                 if tr["Type"] == ActionEnum.BUY:  #buy
                     #stop loss trigger
-                    _sl_price = tr["ActionPrice"] - tr["SL"] / _point
+                    _sl_price = tr["ActionPrice"] + tr["SL"] / _point
                     _pt_price = tr["ActionPrice"] + tr["PT"] / _point
                     if done:
                         p = (self._c - tr["ActionPrice"]) * _point
@@ -235,13 +243,11 @@ class tgym(gym.Env):
                     elif self._l <= _sl_price:
                         self._manage_tranaction(tr, -tr["SL"], _sl_price)
                         _total_reward += -tr["SL"]
-                        self.current_holding[i] -= 1
                     elif self._h >= _pt_price:
                         self._manage_tranaction(tr, tr["PT"], _pt_price)
                         _total_reward += tr["PT"]
-                        self.current_holding[i] -= 1
                     else:  # still open
-                        _total_reward = self.shaping_reward if self._c >= self._c_previous else -self.shaping_reward
+                        _total_reward += self.shaping_reward if self._c >= self._c_previous else -self.shaping_reward
                         self.current_draw_downs[i] = int(
                             (self._l - tr["ActionPrice"]) * _point)
                         # _total_reward += self.current_draw_downs[i]
@@ -249,10 +255,11 @@ class tgym(gym.Env):
                         if self.current_draw_downs[i] < 0:
                             if tr["MaxDD"] > self.current_draw_downs[i]:
                                 tr["MaxDD"] = self.current_draw_downs[i]
+                        close = False
 
                 elif tr["Type"] == ActionEnum.SELL:  # sell
                     #stop loss trigger
-                    _sl_price = tr["ActionPrice"] + tr["SL"] / _point
+                    _sl_price = tr["ActionPrice"] - tr["SL"] / _point
                     _pt_price = tr["ActionPrice"] - tr["PT"] / _point
                     if done:
                         p = (tr["ActionPrice"] - self._c) * _point
@@ -261,13 +268,11 @@ class tgym(gym.Env):
                     elif self._h >= _sl_price:
                         self._manage_tranaction(tr, -tr["SL"], _sl_price)
                         _total_reward += -tr["SL"]
-                        self.current_holding[i] -= 1
                     elif self._l <= _pt_price:
                         self._manage_tranaction(tr, tr["PT"], _pt_price)
                         _total_reward += tr["PT"]
-                        self.current_holding[i] -= 1
                     else:
-                        _total_reward = self.shaping_reward if self._c <= self._c_previous else -self.shaping_reward
+                        _total_reward += self.shaping_reward if self._c <= self._c_previous else -self.shaping_reward
                         self.current_draw_downs[i] = int(
                             (tr["ActionPrice"] - self._h) * _point)
                         # _total_reward += self.current_draw_downs[i]
@@ -275,11 +280,13 @@ class tgym(gym.Env):
                         if self.current_draw_downs[i] < 0:
                             if tr["MaxDD"] > self.current_draw_downs[i]:
                                 tr["MaxDD"] = self.current_draw_downs[i]
-
+                        close = False
                 if _max_draw_down > self.max_draw_downs[i]:
                     self.max_draw_downs[i] = _max_draw_down
+                if close:
+                    self.current_holding[i] -= 1
 
-        return _total_reward
+        return _total_reward, close
 
     def _limit_order_process(self, i, _action, done):
         for tr in self.transaction_limit_order:
@@ -294,7 +301,7 @@ class tgym(gym.Env):
                         or (tr["ActionPrice"] <= self._h and _action == 1):
                         tr["ActionStep"]=self.current_step                             
                         self.current_holding[i] += 1
-                        self.balance -= self.cf.symbol(self.assets[i],"transaction_fee")
+                        self.balance += self.cf.symbol(self.assets[i],"transaction_fee")
                         self.transaction_limit_order.remove(tr)
                         self.transaction_live.append(tr)
                         self.tranaction_open_this_step.append(tr)
@@ -334,10 +341,11 @@ class tgym(gym.Env):
         
         # no action anymore
         # print(f"step:{self.current_step}, action:{actions}, reward :{reward}, balance: {self.balance} {self.max_draw_down_pct}")
-        obs = ([self.balance, self.max_draw_down_pct] +
-               self.current_holding +
-               self.current_draw_downs +
-               self.get_observation(self.current_step))
+        # obs = ([self.balance, self.max_draw_down_pct] +
+        #        self.current_holding +
+        #        self.current_draw_downs +
+        #        self.get_observation(self.current_step))
+        obs = self.get_observation(self.current_step)
         return np.array(obs).astype(np.float32), reward, done, {
             "Close": self.tranaction_close_this_step
         }
@@ -364,11 +372,13 @@ class tgym(gym.Env):
         cols = self.observation_list
         v = []
         for a in self.assets:
-            subset = self.df.query(
-                f'{self.asset_col} == "{a}" & {self.time_col} == "{_dt}"')
-            assert not subset.empty
-            v += subset.loc[_dt, cols].tolist()
-        assert len(v) == len(self.assets) * len(cols)
+            for i in range(self.backward_window):
+
+                subset = self.df.query(
+                    f'{self.asset_col} == "{a}" & {self.time_col} == "{_dt}"')
+                assert not subset.empty
+                v += subset.loc[_dt, cols].tolist()
+        assert len(v) == len(self.assets) * len(cols) * self.backward_window
         return v
 
     def reset(self):

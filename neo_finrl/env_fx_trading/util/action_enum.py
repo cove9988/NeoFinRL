@@ -3,9 +3,9 @@ class ActionEnum(enumerate):
     Enum for action space
     :param enumerate: Enumerate class
     """
-    BUY = 1
-    SELL = -1
     HOLD = 0
+    BUY = 1
+    SELL = 2
     EXIT = 3
 
 class Folder(enumerate):
@@ -31,11 +31,12 @@ def form_action(action):
     Form action from action space
     :param action: action space
     """
+    expected_action = 0.995
     r = 0.0
-    if action <= -0.5:
+    if action <= -expected_action:
         r =-(action + 0.5) * 2
         return ActionEnum.SELL, r, "SELL"
-    elif action >= +0.5:
+    elif action >= +expected_action:
         r = (action - 0.5) * 2
         return ActionEnum.BUY, r, "BUY"   
     else:
